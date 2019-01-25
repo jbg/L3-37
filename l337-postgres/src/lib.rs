@@ -9,9 +9,7 @@ pub extern crate tokio_postgres;
 use futures::sync::oneshot;
 use futures::{Async, Future};
 use tokio::executor::spawn;
-use tokio_postgres::error::Error;
-use tokio_postgres::params::ConnectParams;
-use tokio_postgres::{Client, TlsMode};
+use tokio_postgres::{Client, Error, MakeTlsConnect, Socket};
 
 use std::fmt;
 
@@ -24,25 +22,34 @@ pub struct AsyncConnection {
 }
 
 /// A `ManageConnection` for `tokio_postgres::Connection`s.
-pub struct PostgresConnectionManager {
-    params: ConnectParams,
-    tls_mode: Box<Fn() -> TlsMode + Send + Sync>,
+pub struct PostgresConnectionManager<T>
+where
+    T: MakeTlsConnect<Socket> + Send
+{
+    config: String,
+    tls: T
 }
 
-impl PostgresConnectionManager {
+impl<T> PostgresConnectionManager<T>
+where
+    T: MakeTlsConnect<Socket> + Send
+{
     /// Create a new `PostgresConnectionManager`.
-    pub fn new<F>(params: ConnectParams, tls_mode: F) -> Result<PostgresConnectionManager>
-    where
-        F: Fn() -> TlsMode + Send + Sync + 'static,
-    {
+    pub fn new<F>(config: &str, tls: T) -> Result<PostgresConnectionManager<T>> {
         Ok(PostgresConnectionManager {
-            params: params,
-            tls_mode: Box::new(tls_mode),
+            config: config.to_owned(),
+            tls
         })
     }
 }
 
-impl l337::ManageConnection for PostgresConnectionManager {
+impl<T> l337::ManageConnection for PostgresConnectionManager<T>
+where
+    T: MakeTlsConnect<Socket> + 'static + Send + Sync + Clone,
+    T::TlsConnect: Send,
+    <T::TlsConnect as tokio_postgres::TlsConnect<Socket>>::Future: Send,
+    <T::TlsConnect as tokio_postgres::TlsConnect<Socket>>::Stream: Send
+{
     type Connection = AsyncConnection;
     type Error = Error;
 
@@ -51,7 +58,7 @@ impl l337::ManageConnection for PostgresConnectionManager {
     ) -> Box<Future<Item = Self::Connection, Error = l337::Error<Self::Error>> + 'static + Send>
     {
         Box::new(
-            tokio_postgres::connect(self.params.clone(), (self.tls_mode)())
+            tokio_postgres::connect(&self.config, self.tls.clone())
                 .map(|(client, connection)| {
                     let (sender, receiver) = oneshot::channel();
                     spawn(connection.map_err(|_| {
@@ -106,10 +113,12 @@ impl l337::ManageConnection for PostgresConnectionManager {
     }
 }
 
-impl fmt::Debug for PostgresConnectionManager {
+impl<T> fmt::Debug for PostgresConnectionManager<T>
+where T: MakeTlsConnect<Socket> + Send
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PostgresConnectionManager")
-            .field("params", &self.params)
+            .field("config", &self.config)
             .finish()
     }
 }
