@@ -3,7 +3,6 @@
 
 extern crate futures;
 pub extern crate l3_37;
-pub extern crate postgres_shared;
 extern crate tokio;
 pub extern crate tokio_postgres;
 
