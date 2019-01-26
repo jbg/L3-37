@@ -35,7 +35,7 @@ where
     T: MakeTlsConnect<Socket> + Send
 {
     /// Create a new `PostgresConnectionManager`.
-    pub fn new<F>(config: &str, tls: T) -> Result<PostgresConnectionManager<T>> {
+    pub fn new(config: &str, tls: T) -> Result<PostgresConnectionManager<T>> {
         Ok(PostgresConnectionManager {
             config: config.to_owned(),
             tls
