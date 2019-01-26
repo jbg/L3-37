@@ -47,8 +47,6 @@ extern crate crossbeam;
 extern crate futures;
 extern crate tokio;
 #[macro_use]
-extern crate failure;
-#[macro_use]
 extern crate log;
 
 mod conn;
@@ -57,12 +55,14 @@ mod inner;
 mod manage_connection;
 mod queue;
 
+use std::fmt;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use futures::future::{self, Either, Future};
 use futures::stream;
 use futures::sync::oneshot;
 use futures::Stream;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::executor;
 use tokio::timer::Delay;
 
@@ -89,11 +89,35 @@ pub struct Config {
 
 /// Error type returned by this module
 #[derive(Debug)]
-pub enum Error<E: Send + 'static> {
+pub enum Error<E: std::error::Error + Send + 'static> {
     /// Error coming from the connection pooling itself
     Internal(error::InternalError),
     /// Error from the connection manager or the underlying client
     External(E),
+}
+
+impl<E> std::error::Error for Error<E>
+where
+    E: std::error::Error + Send + 'static
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(match self {
+            Error::Internal(e) => e,
+            Error::External(e) => e,
+        })
+    }
+}
+
+impl<E> fmt::Display for Error<E>
+where
+    E: std::error::Error + Send + 'static
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::Internal(e) => write!(f, "pool error: {}", e),
+            Error::External(e) => write!(f, "database error: {}", e)
+        }
+    }
 }
 
 impl Default for Config {
