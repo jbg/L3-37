@@ -82,7 +82,7 @@ where
         // If we can execute this without erroring, we're definitely still connected to the datbase
         Box::new(
             conn.client
-                .batch_execute("")
+                .simple_query("")
                 .map_err(|e| l337::Error::External(e)),
         )
     }
