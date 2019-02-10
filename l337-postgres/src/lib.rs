@@ -7,7 +7,7 @@ extern crate tokio;
 pub extern crate tokio_postgres;
 
 use futures::sync::oneshot;
-use futures::{Async, Future};
+use futures::{Async, Future, Stream};
 use tokio::executor::spawn;
 use tokio_postgres::{Client, Error, MakeTlsConnect, Socket};
 
@@ -83,6 +83,8 @@ where
         Box::new(
             conn.client
                 .simple_query("")
+                .collect()
+                .map(|_| ())
                 .map_err(|e| l337::Error::External(e)),
         )
     }
