@@ -9,7 +9,7 @@ pub extern crate tokio_postgres;
 use futures::sync::oneshot;
 use futures::{Async, Future, Stream};
 use tokio::executor::spawn;
-use tokio_postgres::{Client, Error, MakeTlsConnect, Socket};
+use tokio_postgres::{Client, Error, Socket, tls::MakeTlsConnect};
 
 use std::fmt;
 
