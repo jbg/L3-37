@@ -9,7 +9,7 @@ pub extern crate tokio_postgres;
 use futures::sync::oneshot;
 use futures::{Async, Future, Stream};
 use tokio::executor::spawn;
-use tokio_postgres::{Client, Error, Socket, tls::MakeTlsConnect};
+use tokio_postgres::{Client, Error, Socket, tls::{MakeTlsConnect, TlsConnect}};
 
 use std::fmt;
 
@@ -47,8 +47,8 @@ impl<T> l337::ManageConnection for PostgresConnectionManager<T>
 where
     T: MakeTlsConnect<Socket> + 'static + Send + Sync + Clone,
     T::TlsConnect: Send,
-    <T::TlsConnect as tokio_postgres::TlsConnect<Socket>>::Future: Send,
-    <T::TlsConnect as tokio_postgres::TlsConnect<Socket>>::Stream: Send
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Stream: Send
 {
     type Connection = AsyncConnection;
     type Error = Error;
