@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Jasper Bryant-Greene <jbg@rf.net.nz>"]
 
 [dependencies]
-l337 = { path = ".." }
+l337-futures3 = { path = ".." }
 futures-preview = { version = "0.3.0-alpha.15", features = ["compat"] }
 tokio = "0.1.8"
 tokio-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
