@@ -21,9 +21,10 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-use futures::Future;
-use std::fmt::Debug;
+use std::{fmt::Debug, future::Future, pin::Pin};
+
 use Error as L337Error;
+
 
 /// A trait which provides connection-specific functionality.
 pub trait ManageConnection: Send + Sync + 'static {
@@ -39,7 +40,7 @@ pub trait ManageConnection: Send + Sync + 'static {
     /// within trait definitions.
     fn connect(
         &self,
-    ) -> Box<Future<Item = Self::Connection, Error = L337Error<Self::Error>> + 'static + Send>;
+    ) -> Pin<Box<Future<Output = Result<Self::Connection, L337Error<Self::Error>>> + Send>>;
 
     /// Determines if the connection is still connected to the database.
     ///
@@ -48,7 +49,7 @@ pub trait ManageConnection: Send + Sync + 'static {
     fn is_valid(
         &self,
         conn: Self::Connection,
-    ) -> Box<Future<Item = (), Error = L337Error<Self::Error>>>;
+    ) -> Pin<Box<Future<Output = Result<(), L337Error<Self::Error>>> + Send>>;
 
     /// Quick check to determine if the connection has broken
     fn has_broken(&self, conn: &mut Self::Connection) -> bool;

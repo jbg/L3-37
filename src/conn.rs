@@ -39,16 +39,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::future::{self, Future};
 use std::ops::{Deref, DerefMut};
 
 use manage_connection::ManageConnection;
 use queue::Live;
 use Pool;
 
-/// Connection future
-pub type ConnFuture<T, E> =
-    future::Either<future::FutureResult<T, E>, Box<Future<Item = T, Error = E> + Send>>;
 
 // From c3po, https://github.com/withoutboats/c3po/blob/08a6fde00c6506bacfe6eebe621520ee54b418bb/src/lib.rs#L40
 

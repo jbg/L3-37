@@ -1,10 +1,10 @@
 [package]
-name = "l337-postgres"
+name = "l337-postgres-futures3"
 version = "0.1.0"
-authors = ["Jonathon Sheffield <samsmug@gmail.com>"]
+authors = ["Jasper Bryant-Greene <jbg@rf.net.nz>"]
 
 [dependencies]
 l337 = { path = ".." }
-futures = "0.1.14"
+futures-preview = { version = "0.3.0-alpha.15", features = ["compat"] }
 tokio = "0.1.8"
 tokio-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }

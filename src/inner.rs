@@ -40,15 +40,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{future::Future, sync::{Arc, Mutex}};
+
 use crossbeam::queue::SegQueue;
-use futures::sync::oneshot;
-use futures::Future;
-use std::sync::{Arc, Mutex};
+use futures::channel::oneshot;
 
 use manage_connection::ManageConnection;
 use queue::{Live, Queue};
 use Config;
 use Error;
+
 
 /// Inner connection pool. Handles creating and holding the connections, as well as keeping track of
 /// futures that are waiting on connections.
@@ -79,7 +80,7 @@ impl<C: ManageConnection> ConnectionPool<C> {
         self.config.max_size
     }
 
-    pub fn connect(&self) -> Box<Future<Item = C::Connection, Error = Error<C::Error>> + Send> {
+    pub fn connect(&self) -> impl Future<Output = Result<C::Connection, Error<C::Error>>> {
         self.manager.connect()
     }
 

@@ -6,12 +6,16 @@ pub extern crate l337;
 extern crate tokio;
 pub extern crate tokio_postgres;
 
-use futures::sync::oneshot;
-use futures::{Async, Future, Stream};
-use tokio::executor::spawn;
+use std::{fmt, future::Future, pin::Pin};
+
+use futures::{
+    channel::oneshot,
+    compat::{Future01CompatExt, Stream01CompatExt},
+    future::{FutureExt, TryFutureExt},
+    stream::TryStreamExt,
+};
 use tokio_postgres::{Client, Error, Socket, tls::{MakeTlsConnect, TlsConnect}};
 
-use std::fmt;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -55,38 +59,44 @@ where
 
     fn connect(
         &self,
-    ) -> Box<Future<Item = Self::Connection, Error = l337::Error<Self::Error>> + 'static + Send>
+    ) -> Pin<Box<Future<Output = std::result::Result<Self::Connection, l337::Error<Self::Error>>> + Send>>
     {
-        Box::new(
-            tokio_postgres::connect(&self.config, self.tls.clone())
-                .map(|(client, connection)| {
-                    let (sender, receiver) = oneshot::channel();
-                    spawn(connection.map_err(|_| {
-                        sender
-                            .send(true)
-                            .unwrap_or_else(|e| panic!("failed to send shutdown notice: {}", e));
-                    }));
-                    AsyncConnection {
-                        broken: false,
-                        client,
-                        receiver,
-                    }
-                }).map_err(|e| l337::Error::External(e)),
-        )
+        tokio_postgres::connect(&self.config, self.tls.clone())
+            .compat()
+            .map_ok(|(client, connection)| {
+                let (sender, receiver) = oneshot::channel();
+                tokio::spawn(
+                    connection
+                        .compat()
+                        .map_err(|_| {
+                            sender
+                                .send(true)
+                                .unwrap_or_else(|e| panic!("failed to send shutdown notice: {}", e));
+                        })
+                        .compat()
+                );
+                AsyncConnection {
+                    broken: false,
+                    client,
+                    receiver
+                }
+            })
+            .map_err(|e| l337::Error::External(e))
+            .boxed()
     }
 
     fn is_valid(
         &self,
         mut conn: Self::Connection,
-    ) -> Box<Future<Item = (), Error = l337::Error<Self::Error>>> {
+    ) -> Pin<Box<Future<Output = std::result::Result<(), l337::Error<Self::Error>>> + Send>> {
         // If we can execute this without erroring, we're definitely still connected to the datbase
-        Box::new(
-            conn.client
-                .simple_query("")
-                .collect()
-                .map(|_| ())
-                .map_err(|e| l337::Error::External(e)),
-        )
+        conn.client
+            .simple_query("")
+            .compat()
+            .try_collect::<Vec<_>>()
+            .map_ok(|_| ())
+            .map_err(|e| l337::Error::External(e))
+            .boxed()
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
@@ -94,16 +104,16 @@ where
             return true;
         }
 
-        match conn.receiver.poll() {
+        match conn.receiver.try_recv() {
             // If we get any message, the connection task stopped, which means this connection is
             // now dead
-            Ok(Async::Ready(_)) => {
+            Ok(Some(_)) => {
                 conn.broken = true;
                 true
             }
             // If the future isn't ready, then we haven't sent a value which means the future is
             // stil successfully running
-            Ok(Async::NotReady) => false,
+            Ok(None) => false,
             // This should never happen, we don't shutdown the future
             Err(err) => panic!("polling oneshot failed: {}", err),
         }

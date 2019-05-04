@@ -55,22 +55,29 @@ mod inner;
 mod manage_connection;
 mod queue;
 
-use std::fmt;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    fmt,
+    iter,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use futures::future::{self, Either, Future};
-use futures::stream;
-use futures::sync::oneshot;
-use futures::Stream;
-use tokio::executor;
-use tokio::timer::Delay;
+use futures::{
+    channel::oneshot,
+    compat::Future01CompatExt,
+    future::{self, FutureExt, TryFutureExt},
+    stream::{FuturesUnordered, TryStreamExt},
+};
+use tokio::{prelude::future::loop_fn, timer::Delay};
 
-pub use conn::{Conn, ConnFuture};
+pub use conn::Conn;
 pub use manage_connection::ManageConnection;
 
 use inner::ConnectionPool;
 use queue::{Live, Queue};
+
 
 /// General connection pool
 pub struct Pool<C: ManageConnection + Send> {
@@ -149,30 +156,28 @@ impl<C: ManageConnection + Send> Pool<C> {
     pub fn new(
         manager: C,
         config: Config,
-    ) -> Box<Future<Item = Pool<C>, Error = Error<C::Error>> + Send> {
+    ) -> impl Future<Output = Result<Pool<C>, Error<C::Error>>> {
         assert!(
             config.max_size >= config.min_size,
             "max_size of pool must be greater than or equal to the min_size"
         );
 
-        let conns = stream::futures_unordered(
-            ::std::iter::repeat(&manager)
-                .take(config.min_size)
-                .map(|c| c.connect()),
-        );
+        let conns: FuturesUnordered<_> = iter::repeat(&manager)
+            .take(config.min_size)
+            .map(|c| c.connect())
+            .collect();
 
         // Fold the connections we are creating into a Queue object
-        let conns = conns.fold::<_, _, Result<_, _>>(Queue::new(), |conns, conn| {
+        let conns = conns.try_fold(Queue::new(), |conns, conn| {
             conns.new_conn(Live::new(conn));
-            Ok(conns)
+            future::ok(conns)
         });
 
         // Set up the pool once the connections are established
-        Box::new(conns.and_then(move |conns| {
+        conns.and_then(move |conns| {
             let conn_pool = Arc::new(ConnectionPool::new(conns, manager, config));
-
-            Ok(Pool { conn_pool })
-        }))
+            future::ok(Pool { conn_pool })
+        })
     }
 
     /// Returns a future that resolves to a connection from the pool.
@@ -182,7 +187,7 @@ impl<C: ManageConnection + Send> Pool<C> {
     ///
     /// This **does not** implement any timeout functionality. Timeout functionality can be added
     /// by calling `.timeout` on the returned future.
-    pub fn connection(&self) -> ConnFuture<Conn<C>, Error<C::Error>> {
+    pub fn connection(&self) -> impl Future<Output = Result<Conn<C>, Error<C::Error>>> {
         let conns = self
             .conn_pool
             .conns
@@ -192,19 +197,19 @@ impl<C: ManageConnection + Send> Pool<C> {
         debug!("connection: acquired connection lock");
         if let Some(conn) = conns.get() {
             debug!("connection: connection already in pool and ready to go");
-            future::Either::A(future::ok(Conn {
+            future::ok(Conn {
                 conn: Some(conn),
                 pool: self.clone(),
-            }))
+            }).boxed()
         } else {
             debug!("connection: try spawn connection");
             if let Some(conn_future) = Self::try_spawn_connection(&self, &conns) {
                 let this = self.clone();
                 debug!("connection: try spawn connection");
-                return future::Either::B(Box::new(conn_future.map(|conn| Conn {
+                return conn_future.map_ok(|conn| Conn {
                     conn: Some(conn),
                     pool: this,
-                })));
+                }).boxed();
             }
             // Have the pool notify us of the connection
             let (tx, rx) = oneshot::channel();
@@ -214,15 +219,13 @@ impl<C: ManageConnection + Send> Pool<C> {
             // Prepare the future which will wait for a free connection
             let this = self.clone();
             debug!("connection: waiting for connection");
-            future::Either::B(Box::new(
-                rx.map(|conn| {
-                    debug!("connection: got connection after waiting");
-                    Conn {
-                        conn: Some(conn),
-                        pool: this,
-                    }
-                }).map_err(|_err| unimplemented!()),
-            ))
+            rx.map_ok(|conn| {
+                debug!("connection: got connection after waiting");
+                Conn {
+                    conn: Some(conn),
+                    pool: this,
+                }
+            }).map_err(|_err| unimplemented!()).boxed()
         }
     }
     /// Attempt to spawn a new connection. If we're not already over the max number of connections,
@@ -231,20 +234,20 @@ impl<C: ManageConnection + Send> Pool<C> {
     pub(crate) fn try_spawn_connection(
         this: &Self,
         conns: &Arc<queue::Queue<<C as ManageConnection>::Connection>>,
-    ) -> Option<Box<Future<Item = Live<C::Connection>, Error = Error<C::Error>> + Send>> {
+    ) -> Option<Pin<Box<Future<Output = Result<Live<C::Connection>, Error<C::Error>>> + Send>>> {
         if let Some(_) = conns.safe_increment(this.conn_pool.max_size()) {
             let conns = Arc::clone(&conns);
-            Some(Box::new(this.conn_pool.connect().then(
-                move |result| match result {
-                    Ok(conn) => Ok(Live::new(conn)),
+            Some(this.conn_pool.connect()
+                .then(move |result| match result {
+                    Ok(conn) => future::ok(Live::new(conn)).boxed(),
                     Err(err) => {
                         // if we weren't able to make a new connection, we need to decrement
                         // connections, since we preincremented the connection count for this  one
                         conns.decrement();
-                        Err(err)
+                        future::err(err).boxed()
                     }
-                },
-            )))
+                })
+                .boxed())
         } else {
             None
         }
@@ -292,42 +295,45 @@ impl<C: ManageConnection + Send> Pool<C> {
 
     fn spawn_new_future_loop(&self) {
         let this1 = self.clone();
-        executor::spawn(future::loop_fn((), move |_| {
+        tokio::spawn(loop_fn((), move |_| {
             let this = this1.clone();
-            this.conn_pool.connect().then(move |res| match res {
-                Ok(conn) => {
-                    // Call put_back instead of new_conn because we want to give the waiting futures
-                    // a chance to get the connection if there are any.
-                    // However, this means we have to call increment before calling put_back,
-                    // as put_back assumes that the connection already exists.
-                    // This could probably use some refactoring
-                    let conns = this
-                        .conn_pool
-                        .conns
-                        .lock()
-                        .expect("posioned connection mutex");
-                    debug!("creating new connection from spawn loop");
-                    conns.increment();
-                    // Drop so we free the lock
-                    ::std::mem::drop(conns);
+            this.conn_pool.connect()
+                .then(move |res| match res {
+                    Ok(conn) => {
+                        // Call put_back instead of new_conn because we want to give the waiting futures
+                        // a chance to get the connection if there are any.
+                        // However, this means we have to call increment before calling put_back,
+                        // as put_back assumes that the connection already exists.
+                        // This could probably use some refactoring
+                        let conns = this
+                            .conn_pool
+                            .conns
+                            .lock()
+                            .expect("posioned connection mutex");
+                        debug!("creating new connection from spawn loop");
+                        conns.increment();
+                        // Drop so we free the lock
+                        ::std::mem::drop(conns);
 
-                    this.put_back(Live::new(conn));
+                        this.put_back(Live::new(conn));
 
-                    Either::A(future::ok(future::Loop::Break(())))
-                }
-                Err(err) => {
-                    error!(
-                        "unable to establish new connection, trying again: {:?}",
-                        err
-                    );
-                    // TODO: make this use config
-                    Either::B(
+                        future::ok(tokio::prelude::future::Loop::Break(()))
+                            .boxed()
+                    }
+                    Err(err) => {
+                        error!(
+                            "unable to establish new connection, trying again: {:?}",
+                            err
+                        );
+                        // TODO: make this use config
                         Delay::new(Instant::now() + Duration::from_secs(1))
-                            .map(|_| future::Loop::Continue(()))
-                            .map_err(|_e| panic!("delay timer errored, shutdown required")),
-                    )
-                }
-            })
+                            .compat()
+                            .map_ok(|_| tokio::prelude::future::Loop::Continue(()))
+                            .map_err(|_e| panic!("delay timer errored, shutdown required"))
+                            .boxed()
+                    }
+                })
+                .compat()
         }));
     }
 
@@ -356,8 +362,6 @@ impl<C: ManageConnection + Send> Pool<C> {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use tokio::prelude::FutureExt;
-    use tokio::runtime::current_thread::Runtime;
 
     #[derive(Debug)]
     pub struct DummyManager {}
@@ -368,15 +372,15 @@ mod tests {
 
         fn connect(
             &self,
-        ) -> Box<Future<Item = Self::Connection, Error = Error<Self::Error>> + 'static + Send>
+        ) -> Pin<Box<Future<Output = Result<Self::Connection, Error<Self::Error>>> + Send>>
         {
-            Box::new(future::ok(()))
+            future::ok(()).boxed()
         }
 
         fn is_valid(
             &self,
             _conn: Self::Connection,
-        ) -> Box<Future<Item = (), Error = Error<Self::Error>>> {
+        ) -> Pin<Box<Future<Output = Result<(), Error<Self::Error>>> + Send>> {
             unimplemented!()
         }
 
@@ -409,10 +413,7 @@ mod tests {
             })
         });
 
-        Runtime::new()
-            .expect("could not run")
-            .block_on(future)
-            .expect("could not run");
+        tokio::run(future);
     }
 
     #[test]
@@ -441,10 +442,7 @@ mod tests {
                 })
         });
 
-        Runtime::new()
-            .expect("could not run")
-            .block_on(future)
-            .expect("could not run");
+        tokio::run(future);
     }
 
     #[test]
@@ -495,9 +493,6 @@ mod tests {
             f1.join(f2)
         });
 
-        Runtime::new()
-            .expect("could not run")
-            .block_on(future)
-            .expect("could not run");
+        tokio::run(future);
     }
 }

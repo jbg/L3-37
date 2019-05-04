@@ -1,12 +1,12 @@
 [package]
-name = "l337"
-version = "0.0.0"
-authors = ["Jonathon Sheffield <samsmug@gmail.com>", "Joe Wilm <joe@jwilm.com>"]
+name = "l337-futures3"
+version = "0.1.0"
+authors = ["Jasper Bryant-Greene <jbg@rf.net.nz>"]
 license = "MIT OR Apache-2.0"
-description = "yet another connection pooler"
+description = "yet another connection pooler (futures3 version)"
 
 [dependencies]
-futures = "0.1.14"
+futures-preview = { version = "0.3.0-alpha.15", features = ["compat"] }
 tokio = "0.1.8"
 crossbeam = "0.4"
 log = "0.4"
