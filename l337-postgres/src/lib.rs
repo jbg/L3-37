@@ -2,7 +2,7 @@
 // #![deny(missing_docs, missing_debug_implementations)]
 
 extern crate futures;
-pub extern crate l337;
+pub extern crate l337_futures3;
 extern crate tokio;
 pub extern crate tokio_postgres;
 
@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<T> l337::ManageConnection for PostgresConnectionManager<T>
+impl<T> l337_futures3::ManageConnection for PostgresConnectionManager<T>
 where
     T: MakeTlsConnect<Socket> + 'static + Send + Sync + Clone,
     T::TlsConnect: Send,
@@ -59,7 +59,7 @@ where
 
     fn connect(
         &self,
-    ) -> Pin<Box<Future<Output = std::result::Result<Self::Connection, l337::Error<Self::Error>>> + Send>>
+    ) -> Pin<Box<Future<Output = std::result::Result<Self::Connection, l337_futures3::Error<Self::Error>>> + Send>>
     {
         tokio_postgres::connect(&self.config, self.tls.clone())
             .compat()
@@ -81,21 +81,21 @@ where
                     receiver
                 }
             })
-            .map_err(|e| l337::Error::External(e))
+            .map_err(|e| l337_futures3::Error::External(e))
             .boxed()
     }
 
     fn is_valid(
         &self,
         mut conn: Self::Connection,
-    ) -> Pin<Box<Future<Output = std::result::Result<(), l337::Error<Self::Error>>> + Send>> {
+    ) -> Pin<Box<Future<Output = std::result::Result<(), l337_futures3::Error<Self::Error>>> + Send>> {
         // If we can execute this without erroring, we're definitely still connected to the datbase
         conn.client
             .simple_query("")
             .compat()
             .try_collect::<Vec<_>>()
             .map_ok(|_| ())
-            .map_err(|e| l337::Error::External(e))
+            .map_err(|e| l337_futures3::Error::External(e))
             .boxed()
     }
 
@@ -119,7 +119,7 @@ where
         }
     }
 
-    fn timed_out(&self) -> l337::Error<Self::Error> {
+    fn timed_out(&self) -> l337_futures3::Error<Self::Error> {
         unimplemented!()
         // Error::io(io::ErrorKind::TimedOut.into())
     }
@@ -138,8 +138,7 @@ where T: MakeTlsConnect<Socket> + Send
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Stream;
-    use l337::{Config, Pool};
+    use l337_futures3::{Config, Pool};
     use std::thread::sleep;
     use std::time::Duration;
     use tokio::runtime::current_thread::Runtime;
@@ -166,7 +165,7 @@ mod tests {
                             Ok(())
                         })
                     }).map(|connection| ((), connection))
-                    .map_err(|e| l337::Error::External(e))
+                    .map_err(|e| l337_futures3::Error::External(e))
             })
         });
 
@@ -196,7 +195,7 @@ mod tests {
                     }).map(|connection| {
                         sleep(Duration::from_secs(5));
                         ((), connection)
-                    }).map_err(|e| l337::Error::External(e))
+                    }).map_err(|e| l337_futures3::Error::External(e))
             });
 
             let q2 = pool.connection().and_then(|mut conn| {
@@ -210,7 +209,7 @@ mod tests {
                     }).map(|connection| {
                         sleep(Duration::from_secs(5));
                         ((), connection)
-                    }).map_err(|e| l337::Error::External(e))
+                    }).map_err(|e| l337_futures3::Error::External(e))
             });
 
             q1.join(q2)
@@ -242,7 +241,7 @@ mod tests {
                     }).map(|connection| {
                         sleep(Duration::from_secs(5));
                         ((), connection)
-                    }).map_err(|e| l337::Error::External(e))
+                    }).map_err(|e| l337_futures3::Error::External(e))
             });
 
             let q2 = pool.connection().and_then(|mut conn| {
@@ -256,7 +255,7 @@ mod tests {
                     }).map(|connection| {
                         sleep(Duration::from_secs(5));
                         ((), connection)
-                    }).map_err(|e| l337::Error::External(e))
+                    }).map_err(|e| l337_futures3::Error::External(e))
             });
 
             let q3 = pool.connection().and_then(|mut conn| {
@@ -270,7 +269,7 @@ mod tests {
                     }).map(|connection| {
                         sleep(Duration::from_secs(5));
                         ((), connection)
-                    }).map_err(|e| l337::Error::External(e))
+                    }).map_err(|e| l337_futures3::Error::External(e))
             });
 
             q1.join3(q2, q3)
