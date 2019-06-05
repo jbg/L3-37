@@ -7,4 +7,4 @@ authors = ["Jasper Bryant-Greene <jbg@rf.net.nz>"]
 l337-futures3 = { path = ".." }
 futures-preview = { version = "0.3.0-alpha.15", features = ["compat"] }
 tokio = "0.1.8"
-tokio-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
+tokio-postgres = "0.4.0-rc.2"
